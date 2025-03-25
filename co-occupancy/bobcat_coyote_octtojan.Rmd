@@ -1,0 +1,1146 @@
+---
+title: "bobs_coys_octtojan"
+author: "Henry Hardy (hrh2133)"
+date: "2025-02-19"
+output: html_document
+---
+
+# R code for co-occupancy analysis of bobcats and coyotes in Ohio 
+#This analysis uses data from a multi-species (bobcat, coyote) occupancy analysis
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#set working directory
+
+# install libraries first using install.packages
+
+library(unmarked)
+library(readxl)
+library(dplyr)
+library(ggplot2)
+library(PerformanceAnalytics)
+
+# source code provided from Ken Kellner to fix package bugs related to the predict function
+source('om_predict_fix.R')
+```
+
+```{r}
+# Data -------------------------------------------------------------
+
+# read in data
+
+# detection history
+spp <- 
+  read_excel('bob_coy_data_twoweeks_02162025.xlsx', sheet = 4) %>% 
+  
+  # set Trapcode as factor
+  mutate(camID = as.factor(camID))
+
+str(spp)
+
+#prey data
+prey <-
+  read_excel('prey_data_twoweeks_02162025.xlsx', sheet = 4) %>%
+  
+# set Trapcode as factor
+  mutate(camID = as.factor(camID))
+
+# trap effort/observation covaraites
+traps <- 
+  read_excel('coys_bobs_trapeffort_by_season.xlsx', sheet = 3) %>% 
+  
+  # set Trapcode as factor
+  mutate(camID = as.factor(camID))
+
+# site covariates
+sites <- 
+  read.csv('cam2021_envdata_11.14.2024.csv') %>% 
+
+  # alter variable structure
+  mutate(CamID = as.factor(camID))
+
+summary(sites)
+```
+
+```{r}
+# Format data ----------------------------------------------------
+
+# this section uses package 'dplyr'
+
+#creating and unmarkedFrameOccuMulti
+#unmarkedFrameOccuMulti(y, siteCovs=NULL, obsCovs=NULL, mapInfo)
+
+#creating y: A list (optionally a named list) of length S where each element is an MxJ matrix of the detection, non-detection data for one species, where M is the number of sites, J is the maximum number of sampling periods per site, and S is the number of species in the analysis.
+y_multi <- 
+  list(
+    matrix(unlist(spp[10:17]),   ncol = 8,  byrow = F), # coy
+    matrix(unlist(spp[2:9]), ncol = 8,  byrow = F) # bob
+    ) 
+
+# add species names
+names(y_multi) <- c("Coyote", "Bobcat")
+
+# check that the columns are correct using head or print functions
+print(y_multi$Coyote)
+
+sum(y_multi$Coyote, na.rm = T)
+sum(y_multi$Bobcat, na.rm = T)
+```
+
+Let's check the bobcat and coyote data for June-Sep
+```{r}
+y_multi$Coyote
+rowSums(y_multi$Coyote, na.rm = TRUE)
+
+y_multi$Bobcat
+rowSums(y_multi$Bobcat, na.rm = TRUE)
+
+cbind(rowSums(y_multi$Coyote, na.rm = TRUE), rowSums(y_multi$Bobcat, na.rm = TRUE))
+```
+
+```{r}
+# observation covariates/trap effort
+obs_covs <- 
+  list(traps[, 2:9], prey[, 2:9], prey[, 18:25], prey[,10:17])
+
+names(obs_covs) <- c("Effort", "Deer", "Squirrel", "Hare")
+
+# create new object sites.scaled for scaled variables 
+sites.scaled <- sites %>% 
+  
+  # use mutate with across and where to scale all numeric varaibles
+  mutate(across(where(is.numeric), scale))
+
+# check data
+head(sites.scaled)
+
+# create site covariates data for the unmarkedFrameOccuMulti 
+site_covs <- 
+  data.frame(sites.scaled)
+
+# adding coyote presence/absence as potential covariate for detection of other species
+Coyote <- data.frame(spp[10:17]) # pull lynx detection history out of full detection history
+
+# adding bobcat presence/absence as potential covariate for detection of other species
+Bobcat <- data.frame(spp[2:9])
+
+# combine observation covariates plus species detection histories
+obs_covs_species <- 
+  c(
+    list(effort = scale(data.frame(traps[, 2:9]))),
+    list(Coyote = scale(Coyote)),
+    list(Bobcat = scale(Bobcat)),
+    list(Deer = scale(data.frame(prey[, 2:9]))),
+    list(Squirrel = scale(data.frame(prey[, 18:25]))),
+    list(Hare = scale(data.frame(prey[, 10:17]))))
+
+# create unmarkedFrameOccuMulti object for analysis
+occ_data <- 
+  unmarkedFrameOccuMulti(
+    y_multi, 
+    siteCovs = site_covs, 
+    obsCovs = obs_covs_species)
+
+# Explore data  ---------------------------------------------------
+summary(occ_data)
+
+# naive occupancy for each species (sites with at least 1 detection / total sites)
+
+plot(occ_data)
+
+# Look at f parameter design matrix
+occ_data@fDesign
+```
+
+```{r}
+# Correlations  ---------------------------------------------------
+
+summary(sites)
+
+# create a subset of numeric covariates we are interested in using for analysis to test for correlations between variables
+
+sites.corr1500 <- 
+  site_covs %>%
+  select(Developed1500, Forest1500, OpenHabitat1500, SHDI_1500, AllRds1500, 
+         MainRds1500, distmainrds, DistanceStreams, WTD.SUM, SQ.SUM, HARE.SUM)
+
+sites.corr1000 <- 
+  site_covs %>%
+  select(Developed1000, Forest1000, OpenHabitat1000,SHDI_1000,
+         AllRds1000, MainRds1000, distmainrds, DistanceStreams, 
+         WTD.SUM, SQ.SUM, HARE.SUM)
+
+sites.corr500 <- 
+  site_covs %>%
+select(Developed500, Forest500, OpenHabitat500, SHDI_500, AllRds500,
+         MainRds500, distmainrds, DistanceStreams, WTD.SUM, SQ.SUM, HARE.SUM)
+
+
+
+# correlation matrix - Pearson
+chart.Correlation(sites.corr1500, 
+                  histogram = TRUE, 
+                  method = "pearson")
+
+#above 0.7 or below -0.7 is significant
+
+#Significant
+#Forest1500 and OpenHabitat1500
+#Forest1500 and SHDI_1500
+#OpenHabitat1500 and SHDI_1500
+#MainRds1500 and distmainrds
+
+cor(sites.corr1000$Forest1000, sites.corr1500$SHDI_1500)
+
+chart.Correlation(sites.corr1000, 
+                  histogram = TRUE, 
+                  method = "pearson")
+#Significant
+#Forest1000 and OpenHabitat1000
+#Forest1000 and SHDI_1000
+#Forest1000 and MainRds1000
+#OpenHabitat1000 and #SHDI_1000
+
+chart.Correlation(sites.corr500, 
+                  histogram = TRUE, 
+                  method = "pearson")
+#Significant:
+#Forest500 and OpenHabitat500
+#Forest500 and SHDI_500
+
+# Detection function ---------------------------------------------
+CB_det <- c(
+  '~Bobcat + effort + Deer', #Bobcat+ effort + Deer (for coyote detection)
+  '~Coyote + effort + Squirrel + Hare') #Coyote + effort + Squirrel + Hare (for bobcat detection)
+```
+
+```{r}
+###### Species marginal occupancy ---------------------------------------------
+# I ran these as species specific analyses first, holding marginal occupancy covariates of other 2 species constant as well as co-occupancy covariates constant to see what covariates were important for each species. Variables were selected from full variable set (not included) based on a-priori hypotheses. 
+
+# Coyote --------------------------------------------------------------------
+
+# Coyote  forest
+C_OF_forest1000 <- c('~Forest1000', '~1', # marginal occupancy coyote, bobcat
+                      '~1')    # co-occupancy coyote"bobcat
+
+C_forest1000 <- occuMulti(CB_det, C_OF_forest1000, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = F), se = T)
+summary(C_forest1000)
+
+C_OF_forest500 <- c('~Forest500', '~1', # marginal occupancy coyote, bobcat
+                      '~1')    # co-occupancy coyote"bobcat
+
+C_forest500 <- occuMulti(CB_det, C_OF_forest500, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = F), se = T)
+summary(C_forest500)
+
+#Coyote Open Habitat
+C_OF_OpenHabitat500 <- c('~OpenHabitat500', '~1', # marginal occupancy coyote, bobcat
+                      '~1')    # co-occupancy coyote"bobcat
+
+C_OpenHabitat500 <- occuMulti(CB_det, C_OF_OpenHabitat500, occ_data,, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = F), se = T)
+summary(C_OpenHabitat500)
+
+#Coyote main roads
+C_OF_MainRds1500 <- c('~MainRds1500', '~1', # marginal occupancy coyote, bobcat
+                '~1')    # co-occupancy coyote"bobcat
+
+C_MainRds1500 <- occuMulti(CB_det, C_OF_MainRds1500, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = F), se = T)
+summary(C_MainRds1500)
+
+C_OF_MainRds1000 <- c('~MainRds1000', '~1', # marginal occupancy coyote, bobcat
+                '~1')    # co-occupancy coyote"bobcat
+
+C_MainRds1000 <- occuMulti(CB_det, C_OF_MainRds1000, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = F), se = T)
+summary(C_MainRds1000)
+
+#Coyote SHDI_1500
+C_OF_SHDI_1500 <- c('~SHDI_1500', '~1', # marginal occupancy coyote, bobcat
+                '~1')    # co-occupancy coyote"bobcat
+
+C_SHDI_1500 <- occuMulti(CB_det, C_OF_SHDI_1500, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = F), se = T)
+summary(C_SHDI_1500)
+
+C_OF_SHDI_1000 <- c('~SHDI_1000', '~1', # marginal occupancy coyote, bobcat
+                '~1')    # co-occupancy coyote"bobcat
+
+C_SHDI_1000 <- occuMulti(CB_det, C_OF_SHDI_1000, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = F), se = T)
+summary(C_SHDI_1000)
+
+C_OF_SHDI_500 <- c('~SHDI_500', '~1', # marginal occupancy coyote, bobcat
+                '~1')    # co-occupancy coyote"bobcat
+
+C_SHDI_500 <- occuMulti(CB_det, C_OF_SHDI_500, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = F), se = T)
+summary(C_SHDI_500)
+
+#Coyote distmainrds
+C_OF_distmainrds <- c('~distmainrds', '~1', # marginal occupancy coyote, bobcat
+                '~1')    # co-occupancy coyote"bobcat
+
+C_distmainrds <- occuMulti(CB_det, C_OF_distmainrds, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = F), se = T)
+summary(C_distmainrds)
+
+#Coyote prey
+C_OF_WTD <- c('~WTD.SUM', '~1', # marginal occupancy coyote, bobcat
+                '~1')    # co-occupancy coyote"bobcat
+
+C_WTD <- occuMulti(CB_det, C_OF_WTD, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = F), se = T)
+summary(C_WTD)
+
+C_OF_SQ <- c('~SQ.SUM', '~1', # marginal occupancy coyote, bobcat
+                '~1')    # co-occupancy coyote"bobcat
+
+C_SQ <- occuMulti(CB_det, C_OF_SQ, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = F), se = T)
+summary(C_SQ)
+
+# create fitlist for model selection table
+coyotes_marg <- fitList(C_forest1000, C_forest500,
+                        C_OpenHabitat500,
+                       C_MainRds1500, C_MainRds1000,
+                         C_SHDI_1500, C_SHDI_1000, C_SHDI_500,
+                        C_distmainrds, C_WTD, C_SQ)
+
+# run model selection
+modSel(coyotes_marg)
+
+#Top covariates:
+#C_SQ
+#c_distmainrds
+#MainRds1000
+#Forest500
+#OpenHabitat500
+```
+
+```{r}
+###### Species marginal occupancy ---------------------------------------------
+# I ran these as species specific analyses first, holding marginal occupancy covariates of other 2 species constant as well as co-occupancy covariates constant to see what covariates were important for each species. Variables were selected from full variable set (not included) based on a-priori hypotheses. 
+
+# Bobcat --------------------------------------------------------------------
+
+B_OF_Null <- c('~1', '~1', # marginal occupancy coyote, bobcat
+                      '~1')    # co-occupancy coyote"bobcat
+
+B_Null <- occuMulti(CB_det, B_OF_Null, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = FALSE), se = T)
+summary(B_Null)
+
+# Bobcat  forest
+B_OF_forest500 <- c('~1', '~Forest500', # marginal occupancy coyote, bobcat
+                      '~1')    # co-occupancy coyote"bobcat
+
+B_forest500 <- occuMulti(CB_det, B_OF_forest500, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = FALSE), se = T)
+summary(B_forest500)
+
+#Bobcat Open Habitat
+B_OF_OpenHabitat1500 <- c('~1', '~OpenHabitat1500', # marginal occupancy coyote, bobcat
+                      '~1')    # co-occupancy coyote"bobcat
+
+B_OpenHabitat1500 <- occuMulti(CB_det, B_OF_OpenHabitat1500, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = FALSE), se = T)
+summary(B_OpenHabitat1500)
+
+#Bobcat all roads
+B_OF_AllRds1000 <- c('~1', '~AllRds1000', # marginal occupancy coyote, bobcat
+                         '~1')    # co-occupancy coyote"bobcat
+
+B_AllRds1000 <- occuMulti(CB_det, B_OF_AllRds1000, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = FALSE), se = T)
+summary(B_AllRds1000)
+
+#Bobcat distancestreams
+B_OF_DistanceStreams <- c('~1', '~DistanceStreams', # marginal occupancy coyote, bobcat
+                        '~1')    # co-occupancy coyote"bobcat
+
+B_DistanceStreams <- occuMulti(CB_det, B_OF_DistanceStreams, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = FALSE), se = T)
+summary(B_DistanceStreams)
+
+#Bobcat prey
+B_OF_WTD <- c('~1', '~WTD.SUM', # marginal occupancy coyote, bobcat
+                '~1')    # co-occupancy coyote"bobcat
+
+B_WTD <- occuMulti(CB_det, B_OF_WTD, occ_data, , method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = FALSE), se = T)
+summary(B_WTD)
+
+# create fitlist for model selection table
+bobcats_marg <- fitList(B_forest500, 
+                                  B_OpenHabitat1500,
+                        B_AllRds1000,
+                        B_DistanceStreams, B_WTD)
+
+# run model selection
+modSel(bobcats_marg)
+
+#Top covaraites
+#OpenHabitat1500
+#DistanceStreams
+```
+
+```{r}
+# Marginal occupancy models for both coyotes and bobcats --------------------------------------
+# use the top occupancy variables for each species
+
+# BUILD A FEW DIFFERENT MODELS
+
+#Significant:
+#Forest and OpenHabitat
+#Forest and SHDI
+#MainRds and distmainrds
+
+#Top Coyotes Covs: 
+#C_SQ
+#c_distmainrds
+#MainRds1000
+#Forest500
+#OpenHabitat500
+
+#Top Bobcats Covs:
+#OpenHabitat1500
+#DistanceStreams
+
+summary(sites)
+
+CB_OF_1 <- c('~SQ.SUM', '~OpenHabitat1500',
+                 '~1') 
+                 
+CB_1 <- occuMulti(CB_det, CB_OF_1, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = FALSE), se = T)
+summary(CB_1)
+
+CB_OF_2 <- c('~distmainrds', '~OpenHabitat1500',
+             '~1') 
+
+CB_2 <- occuMulti(CB_det, CB_OF_2, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = FALSE), se = T)
+summary(CB_2)
+
+CB_OF_3 <- c('~MainRds1000', '~OpenHabitat1500',
+             '~1') 
+CB_3 <- occuMulti(CB_det, CB_OF_3, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = FALSE), se = T)
+summary(CB_3)
+
+CB_OF_5 <- c('~OpenHabitat500', '~OpenHabitat1500',
+             '~1') 
+
+CB_5 <- occuMulti(CB_det, CB_OF_5, occ_data, method="Nelder-Mead",
+                          control = list(maxit = 10000, trace = FALSE), se = T)
+summary(CB_5)
+
+# create fitlist
+CB_marg_mods <- 
+  fitList(CB_1, CB_2, CB_3, CB_5)
+
+# model selection
+modSel(CB_marg_mods)
+
+#CB_2 Best
+```
+
+```{r}
+# Co-occupancy models  --------------------------------------------
+# USE BEST VARIABLES FROM THE BEST COMBINED MARGINAL MODEL AND TRY DIFFERENT CO-OCCUPANCY VARIABLES
+
+CB_coocc_6 <- c('~distmainrds', '~OpenHabitat1500',
+            '~Forest500 + OpenHabitat500')
+
+CB_CO_6 <- occuMulti(CB_det, CB_coocc_6, occ_data)
+summary(CB_CO_6)
+
+CB_coocc_9 <-  c('~distmainrds', '~OpenHabitat1500',
+             '~OpenHabitat500')
+
+CB_CO_9 <- occuMulti(CB_det, CB_coocc_9, occ_data)
+summary(CB_CO_9)
+
+CB_coocc_12 <- c('~distmainrds', '~OpenHabitat1500',
+             '~Forest500')
+
+CB_CO_12 <- occuMulti(CB_det, CB_coocc_12, occ_data)
+summary(CB_CO_12)
+
+#Significant
+#Forest and OpenHabitat
+#Forest and SHDI
+#MainRds and distmainrds
+
+# create fitlist
+co.occ_mods <- 
+  fitList(CB_CO_6,CB_CO_9, CB_CO_12)
+
+# model selection
+modSel(co.occ_mods)
+
+```
+
+```{r}
+# Marginal occupancy results -------------------------------------
+
+# this section uses package ggplot2
+
+# calculate marginal occupancy using the predict function
+
+# bobcat
+B_mo<- 
+  (predict(CB_CO_12, #the model we want to use to make predictions
+           'state', #specifies we want to predict the occupancy state
+           species ='Bobcat')) #specifies which species
+
+# saving predicted values for each species to plot
+B_pred <- 
+  mean(B_mo$Predicted)
+
+B_low <- 
+  mean(B_mo$lower)
+
+B_up <- 
+  mean(B_mo$upper)
+
+B_pred
+B_low
+B_up
+
+# coyote
+C_mo <- 
+  (predict(CB_CO_12,
+           'state',
+           species='Coyote'))
+
+C_pred <- 
+  mean(C_mo$Predicted)
+
+C_low <- 
+  mean(C_mo$lower)
+
+C_up <- 
+  mean(C_mo$upper)
+
+C_pred
+C_low
+C_up
+
+# save predicted values for all three species and assign variable names to plot together
+CB_pred <- 
+  c(C_pred, B_pred)
+
+CB_upper <- 
+  c(C_up, B_up)
+
+CB_lower <- 
+  c(C_low, B_low)
+
+# create variables names for graph 
+species <- 
+  c("Coyote", "Bobcat")
+
+season <- 
+  c("June to September 2021", "June to September 2021")
+
+# combine into data frame
+pred.df<-
+  data.frame(cbind(species, season, CB_pred, CB_upper, CB_lower))
+
+str(pred.df)
+
+# change variable structure
+pred.df$CB_pred <- 
+  as.numeric(pred.df$CB_pred)
+
+pred.df$CB_upper <- 
+  as.numeric(pred.df$CB_upper)
+
+pred.df$CB_lower <- 
+  as.numeric(pred.df$CB_lower)
+
+ggplot(
+  data = pred.df, 
+  aes(x = species, 
+      y = CB_pred))+ 
+  geom_point()+
+  geom_errorbar(
+    data = pred.df, 
+    aes(x = species, 
+        ymin = CB_lower, 
+        ymax = CB_upper), 
+    width = 0.25,
+    color = '#003E83')+
+  scale_y_continuous(
+    breaks = seq(0,1,0.1),
+    limits = c(0,1),
+    expand = c(0,0))+
+  labs(
+    title = 'Predicted marginal occupancy for Bobcats and Coyotes',
+    x = 'Species',
+    y = 'Occupancy')+
+  theme_bw()+
+  theme(
+    plot.title = element_text(hjust = 0.5,
+                              size = 18),
+    axis.text = element_text(size = 12),
+    axis.title = element_text(size = 15))
+
+```
+
+```{r}
+# Detection results -------------------------------------
+
+# calculate marginal detection using the predict function
+
+# coyote
+C_md <- 
+  (predict(CB_CO_12, # the model we want to use to make predictions
+           'det', # specifies we want the predicted detection
+           species='Coyote')) # specifies the species
+
+mean(C_md$Predicted, na.rm = T)
+mean(C_md$lower, na.rm = T)
+mean(C_md$upper, na.rm = T)
+
+# bobcat
+B_md <- 
+  (predict(CB_CO_12,
+           'det',
+           species ='Bobcat'))
+
+mean(B_md$Predicted, na.rm = T)
+mean(B_md$lower, na.rm = T)
+mean(B_md$upper, na.rm = T)
+
+```
+
+```{r}
+# Conditional occupancy results ----------------------------------
+
+#calculate conditional occupancy results (predicted occupancy of one species conditional on the presence/absence of another species) using the predict function
+
+# Coyote
+
+# coyote | bobcat present
+C_co_B <- 
+  (predict(CB_CO_12,
+           'state',
+           species='Coyote',
+           cond='Bobcat')) 
+
+mean(C_co_B$Predicted)
+
+# coyote | bobcat absent
+C_noB <- 
+  (predict(CB_CO_12,
+           'state',
+           species ='Coyote',
+           cond ='-Bobcat'))
+
+mean(C_noB$Predicted)
+
+
+# Bobcat
+
+# bobcat | coyote present
+B_co_C <- 
+  (predict(CB_CO_12,
+           'state',
+           species ='Bobcat',
+           cond ='Coyote'))
+
+mean(B_co_C$Predicted)
+
+# bobcat | coyote absent
+B_noC <- 
+  (predict(CB_CO_12,
+           'state',
+           species ='Bobcat',
+           cond ='-Coyote')) 
+
+mean(B_noC$Predicted)
+```
+
+```{r}
+# Coyote Marginal occupancy graph (distmainrds) ------------------------------
+
+# this section uses package ggplot2 and package rphylopic
+
+# I have provided code to make a marginal occupancy graph for one species based on one variable. You can use the template below to graph other species predictions and other variables
+
+# data
+CB_coocc_12 <- c('~distmainrds', '~OpenHabitat1500',
+             '~Forest500')
+
+# create new data frame holding all variables constant except the one we want to plot using expand.grid function. This new data frame must include all variables in the model including both detection on occupancy variables for all species and species combinations
+
+new.df.distrds <- 
+  data.frame(
+    expand.grid(
+      distmainrds = seq(
+        min(sites.scaled$distmainrds), 
+        max(sites.scaled$distmainrds), 
+        0.01),
+      
+      OpenHabitat1500 = mean(sites.scaled$OpenHabitat1500),
+      Forest500 = mean(sites.scaled$Forest500)))
+
+# calculate predicted occupancy using the chosen model for a species to add to the new data frame created above
+Epsi_C <- 
+  predict(CB_CO_12, 
+          type ="state", 
+          species = 'Coyote',  
+          newdata = new.df.distrds)
+
+# combine predicted data from above with new data frame
+Epsi_C_all <- 
+  data.frame(Epsi_C, 
+             OpenHabitat1500 = new.df.distrds$OpenHabitat1500,
+             distmainrds = new.df.distrds$distmainrds,
+              Forest500 = new.df.distrds$Forest500)
+
+
+Epsi_C_all <- 
+  Epsi_C_all %>%
+  mutate(lwr = Predicted - SE,
+         upr = Predicted + SE)
+
+# add raw data for x-axis to new data frame for plotting instead of scaled variable which is hard to interpret
+
+distrds <- 
+  matrix(
+    seq(from = 139.2, 
+        to = 13144.1, 
+        length.out = 368),
+    ncol = 1)
+
+# combined
+Epsi_C_all <- 
+  cbind(Epsi_C_all, distrds)
+
+
+# graph
+
+C.distrds.plot <- ggplot(data = Epsi_C_all, aes(x = distrds, 
+                                                          y = Predicted)) +
+  
+  # add predicted line
+  geom_line(linewidth = 1, 
+            color = "black") +
+  
+  # add error ribbon around predicted line
+  geom_ribbon( aes(ymin = lwr, 
+                   ymax = upr), 
+               alpha = 0.45, 
+               fill = "darkgrey") +
+  
+  # alter axis labels
+  xlab ("Distance to nearest main road (m)")+
+  ylab ("Occupancy Probability - Coyote") +
+  ggtitle("Fall/Winter") +
+  
+  # standardize plot area and set breaks
+  coord_cartesian(ylim = c(0,1),
+                  xlim = c(130,13200)) +
+  scale_x_continuous(breaks = seq(130,13200, 3000)) +
+  
+  # adjust theme elements for pub
+  theme(plot.title = element_text(hjust = 0.5, 
+                                  size = 20),
+        axis.text = element_text(size = 15),
+        axis.title = element_text(size = 18))
+
+C.distrds.plot
+
+#ggsave("BC_distroadwinter.jpg", height = 5, width = 8, units = 'in')
+```
+
+```{r}
+# Bobcat Marginal occupancy graph (OpenHabitat1500) ----------------------------
+
+# this section uses package ggplot2 and package rphylopic
+
+# I have provided code to make a marginal occupancy graph for one species based on one variable. You can use the template below to graph other species predictions and other variables
+
+# data
+CB_coocc_12 <- c('~distmainrds', '~OpenHabitat1500',
+             '~Forest500')
+
+# create new data frame holding all variables constant except the one we want to plot using expand.grid function. This new data frame must include all variables in the model including both detection on occupancy variables for all species and species combinations
+
+new.df.OH1500 <- 
+  data.frame(
+    expand.grid(
+      OpenHabitat1500 = seq(
+        min(sites.scaled$OpenHabitat1500), 
+        max(sites.scaled$OpenHabitat1500), 
+        0.01),
+      
+      distmainrds = mean(sites.scaled$distmainrds),
+      Forest500 = mean(sites.scaled$Forest500)))
+
+# calculate predicted occupancy using the chosen model for a species to add to the new data frame created above
+Epsi_B <- 
+  predict(CB_CO_12, 
+          type ="state", 
+          species = 'Bobcat',  
+          newdata = new.df.OH1500)
+
+# combine predicted data from above with new data frame
+Epsi_B_all <- 
+  data.frame(Epsi_B, 
+              OpenHabitat1500 = new.df.OH1500$OpenHabitat1500,
+             distmainrds = new.df.OH1500$distmainrds,
+              Forest500 = new.df.OH1500$Forest500)
+
+Epsi_B_all <- 
+  Epsi_B_all %>%
+  mutate(lwr = Predicted - SE,
+         upr = Predicted + SE)
+
+# add raw data for x-axis to new data frame for plotting instead of scaled variable which is hard to interpret
+OH1500 <- 
+  matrix(
+    seq(from = 0, 
+        to = 0.1716, 
+        length.out = 361),
+    ncol = 1)
+
+# combined
+Epsi_B_all <- 
+  cbind(Epsi_B_all, OH1500)
+
+
+# graph
+
+B.OH1500.plot <- ggplot(data = Epsi_B_all, aes(x = OH1500, 
+                                                          y = Predicted)) +
+  
+  # add predicted line
+  geom_line(linewidth = 1, 
+            color = "black") +
+  
+  # add error ribbon around predicted line
+  geom_ribbon( aes(ymin = lwr, 
+                   ymax = upr), 
+               alpha = 0.45, 
+               fill = "darkgrey") +
+  
+  # alter axis labels
+  xlab ("Proportion of open habitat within 1500 meters")+
+  ylab ("Occupancy Probability - Bobcat") +
+  ggtitle("Fall/Winter") +
+  
+  # standardize plot area and set breaks
+  coord_cartesian(ylim = c(0,1),
+                  xlim = c(0,0.175)) +
+  scale_x_continuous(breaks = seq(0,0.175, 0.05)) +
+  
+  # adjust theme elements for pub
+  theme(plot.title = element_text(hjust = 0.5, 
+                                  size = 20),
+        axis.text = element_text(size = 15),
+        axis.title = element_text(size = 18))
+
+B.OH1500.plot
+
+#ggsave("BC_OH1500winter.jpg", height = 5, width = 8, units = 'in')
+```
+
+```{r}
+# Co-occupancy graphs (Forest500) -----------------------------------------
+
+# this sections uses package ggplot 
+
+# data
+CB_coocc_12 <- c('~distmainrds', '~OpenHabitat1500',
+             '~Forest500')
+
+# create new data frame holding all variables constant except the one we want to plot using expand.grid function. This new data frame must include all variables in the model including both detection on occupancy variables for all species and species combinations
+
+CB_CO_12_F500.df <- 
+  data.frame(
+    expand.grid(
+     Forest500 = seq(
+        min(sites.scaled$Forest500), 
+        max(sites.scaled$Forest500), 
+        0.01),
+      distmainrds = mean(sites.scaled$distmainrds),
+      OpenHabitat1500 = mean(sites.scaled$OpenHabitat1500)))
+
+# add raw data for x-axis to new data frame for plotting instead of scaled variable which is hard to interpret
+F500 <- 
+  matrix(
+    seq(from = 0.53, 
+        to = 1, 
+        length.out = 467),
+    ncol = 1)
+
+summary(sites)
+
+#Min 466/873 = 0.53
+#Max 873/873 = 1
+#873 pixels in 500 m
+
+
+# get predicted values for co-occurrence of lynx and wolf with new data frame only varying values for CLC_forest
+Epsi_coOcc_BC<- 
+  predict(CB_CO_12, 
+          type = "state", 
+          species = c('Coyote', 'Bobcat'), 
+          newdata = CB_CO_12_F500.df)
+
+# combine predicted data from above with new data frame
+Epsi_coOcc_BC <- 
+  data.frame(Epsi_coOcc_BC,
+              OpenHabitat1500 = CB_CO_12_F500.df$OpenHabitat1500,
+             distmainrds = CB_CO_12_F500.df$distmainrds,
+             Forest500 = CB_CO_12_F500.df$Forest500)
+
+# combine raw CLC_forest values with predicted values for coyote and bobcat in new data frame
+Epsi_coOcc_BC <- 
+  cbind(Epsi_coOcc_BC, F500)
+
+Epsi_coOcc_BC <- 
+  Epsi_coOcc_BC %>% 
+  mutate(lwr = Predicted - SE,
+         upr = Predicted + SE)
+
+
+# graph
+Epsi_coOcc_BC.plot <- ggplot(data = Epsi_coOcc_BC, aes(x = F500, 
+                                                                 y = Predicted)) + 
+  
+  # add predicted line
+  geom_line(size = 1) +
+  
+  # add error ribbon
+  geom_ribbon(aes(ymin = lwr, 
+                  ymax = upr), 
+              alpha = .45, 
+              fill = "darkgrey") +
+  
+  # alter axis labels
+  labs(x = (expression(paste("Proportion of forest habitat within 500 meters"))),
+       y = "Predicted Co-occurrence") +
+  ggtitle("Fall/Winter") +
+  
+  # standardize plot area
+  coord_cartesian(ylim = c(0,1),
+                  xlim = c(0.50,1)) +
+  scale_x_continuous(breaks = seq(0.50,1, 0.1)) +
+  
+  # adjust theme elements for pub
+  theme(plot.title = element_text(hjust = 0.5, 
+                                  size = 20),
+        axis.text = element_text(size = 15),
+        axis.title = element_text(size = 18))
+  
+
+Epsi_coOcc_BC.plot
+
+#use this code to export graphs
+#fix so says density for roads
+#ggsave("BC_cooccurenceallrds500winter.jpg", height = 5, width = 8, units = 'in')
+```
+
+```{r}
+# Conditional occupancy graph (Forest500)-----------------------------------
+
+F500 <- 
+  matrix(
+    seq(from = 0.53, 
+        to = 1, 
+        length.out = 467),
+    ncol = 1)
+
+summary(sites)
+
+# create variable for predicted occupancy of each species conditional on every other species presence/absence
+
+# coyote | bobcat
+Epsi_C_B <- 
+  predict(CB_CO_12, 
+          type ="state", 
+          species = 'Coyote', 
+          cond = 'Bobcat', 
+          newdata = CB_CO_12_F500.df)
+
+# coyote | bobcat absent
+Epsi_C_noB <- 
+  predict(CB_CO_12, 
+          type ="state", 
+          species = 'Coyote', 
+          cond = '-Bobcat', 
+          newdata= CB_CO_12_F500.df)
+
+# bobcat | coyote
+Epsi_B_C <- 
+  predict(CB_CO_12, 
+          type ="state", 
+          species = 'Bobcat', 
+          cond = 'Coyote', 
+          newdata = CB_CO_12_F500.df)
+
+# bobcat | coyote absent
+Epsi_B_noC <- 
+  predict(CB_CO_12, 
+          type ="state", 
+          species = 'Bobcat', 
+          cond = '-Coyote', 
+          newdata = CB_CO_12_F500.df)
+
+
+# add conditional column for each of the conditional occupancy data frames that specifies present/absent and another for species, as well as column for 1 SE, and column for the unscaled variable CLC_forest
+
+# coyote | bobcat
+Epsi_C_B <- 
+  Epsi_C_B %>%
+  mutate(lwr = Predicted-SE,
+         upr = Predicted + SE,
+         spp = "Coyote",
+         conditional = "Present",
+         c.spp = "Bobcat")
+
+Epsi_C_B <- 
+  cbind(Epsi_C_B, F500)
+
+# coyote | bobcat absent
+Epsi_C_noB <- 
+  Epsi_C_noB %>%
+  mutate(lwr = Predicted-SE,
+         upr = Predicted + SE,
+         spp = "Coyote",
+         conditional = "Absent",
+         c.spp = "Bobcat")
+
+Epsi_C_noB <- 
+  cbind(Epsi_C_noB, F500)
+
+# bobcat | coyote
+Epsi_B_C <- 
+  Epsi_B_C %>%
+  mutate(lwr = Predicted-SE,
+         upr = Predicted + SE,
+         spp = "Bobcat",
+         conditional = "Present",
+         c.spp = "Coyote")
+
+Epsi_B_C <- 
+  cbind(Epsi_B_C, F500)
+
+# bobcat | coyote absent
+Epsi_B_noC <- 
+  Epsi_B_noC %>%
+  mutate(lwr = Predicted-SE,
+         upr = Predicted + SE,
+         spp = "Bobcat",
+         conditional = "Absent",
+         c.spp = "Coyote")
+
+Epsi_B_noC <- 
+  cbind(Epsi_B_noC, F500)
+
+
+
+Epsi_condOcc_all <- 
+  rbind(Epsi_B_C, 
+        Epsi_B_noC, 
+        Epsi_C_B, 
+        Epsi_C_noB) 
+
+View(Epsi_condOcc_all)
+
+# graph
+
+# labels and color vectors
+colors <- 
+  c("darkgrey", "black")
+
+label <- 
+  c("Absent", "Present")
+
+lines <- 
+  c("dotted", "solid")
+
+occ.labels <- 
+  c("Probability of Coyote", 
+    "Probability of Bobcat")
+
+names(occ.labels) <- 
+  c("Coyote", 
+    "Bobcat")
+
+cond.labels <- 
+  c("Conditional on Coyote", 
+    "Conditional on Bobcat")
+
+names(cond.labels) <- 
+  c("Coyote",
+    "Bobcat")
+
+condOcc.plot <- ggplot(data = Epsi_condOcc_all, aes(x = F500, 
+                                                                  y = Predicted, 
+                                                                  group = conditional)) +
+  
+  # add error ribbon
+  geom_ribbon(aes(ymin = lwr, 
+                  ymax = upr, 
+                  fill = conditional), 
+              alpha = 0.7) +
+  
+  # add predicted lines
+  geom_line(aes(x = F500, 
+                y = Predicted, 
+                linetype = conditional), 
+            size = 0.5, 
+            color = "black") +
+  
+  # rename axis labels
+  labs(x = (expression(paste("Proportion of forest habitat within 500 meters"))),
+       y = "Occupancy Probability") +
+  ggtitle("Fall/Winter") +
+  
+  # use facet grid to divide the plots and label the panels
+  facet_grid(c.spp ~ spp, 
+             labeller = labeller(c.spp = cond.labels, 
+                                 spp = occ.labels)) +
+  
+  # change the line type to be different for present and absent data
+  scale_linetype_manual(values = lines, 
+                        labels = label) +
+  
+  # change colors of error ribbon to be different for present and absent data
+  scale_fill_manual(values = colors, 
+                    labels = label) +
+  
+  # set plotting area
+  coord_cartesian(ylim = c(0,1.1)) +
+  
+  # specify breaks for y -axis
+  scale_y_continuous(breaks = seq(from = 0, to =1, by = 0.25)) +
+  
+  #specify breaky for x axis
+  scale_x_continuous(breaks = seq(0.5,1, 0.1)) +
+  
+  
+  # adjust theme elements for pub
+  theme(plot.title = element_text(hjust = 0.5, 
+                                  size = 20),
+        legend.title = element_blank(),
+        axis.text = element_text(size = 15),
+        axis.title = element_text(size = 18),
+        strip.text = element_text(size = 15)); condOcc.plot #print
+
+# columns are spp it is predicting occupancy for, and rows are the species the predictions are conditional on
+#ggsave("BC_condoccallrdswinter.jpg", height = 8, width = 10, units = 'in')
+```
