@@ -1,0 +1,354 @@
+---
+title: "Bobcat-Coyote Overlap"
+author: "Viorel Popescu"
+date: "2025-02-12"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+setwd("~/Downloads/6.co-occupancy/My Data")
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(lubridate)
+library(chron)
+library(camtrapR)
+library(epitools)
+library(pivottabler)
+library(openxlsx)
+library(purrr)
+library(overlap)
+library(data.table)
+library(circular)
+```
+
+```{r}
+bob_coy <- read.csv("bob_coy_overlap_noJan2021.csv")
+str(bob_coy)
+
+bob_coy <- bob_coy |>
+  filter(Station != "2_AEP")
+
+str(bob_coy)
+```
+
+## ANNUAL ACTIVITY
+
+Investigate activity of bobcats and coyotes separately and their overlap
+```{r}
+bobcat <- bob_coy[bob_coy$Species == "Bobcat",]$radtime
+coyote <- bob_coy[bob_coy$Species == "Coyote",]$radtime
+
+densityPlot(bobcat, rug = TRUE)
+densityPlot(coyote, rug = TRUE)
+
+#tiff("annual overlap.tif", width = 7, height = 5, units = "in", res = 200)
+overlapPlot(bobcat, coyote, main= "Annual Activity")
+legend('top', c("Bobcat", "Coyote"), lty=c(1,2), col=c(1, "blue3"), bty='n',cex = 1)
+#dev.off()
+
+```
+
+Estimate overlap coefficient
+```{r}
+bob_coy_est <- overlapEst(bobcat, coyote, type = ("Dhat4"))
+print(bob_coy_est)
+
+watson.wheeler.test(list(bobcat, coyote))
+```
+
+Get confidence intervals for overlap coefficient via bootstrapping
+```{r}
+bs <- bootstrap(bobcat, coyote, 10000, type = "Dhat4")
+mean(bs)
+```
+
+```{r}
+hist(bs)
+abline(v=bob_coy_est, col='red', lwd=2) # our original estimate
+abline(v=mean(bs), col='blue', lwd=2, lty=3) # the estimate based on the 10000 simulated values
+```
+
+Get CIs for the bootstrapping estimate
+```{r}
+(CInorm <- bootCI(bob_coy_est, bs)['norm0', ])
+
+hist(bs, main="Bootstrap Estimation of Overlap Coefficient", cex.main=2)
+abline(v=bob_coy_est, col='red', lwd=2) # our original estimate
+abline(v=mean(bs), col='blue', lwd=2, lty=3) # the estimate based on the 10000 simulated values
+abline(v=CInorm, col='deeppink', lwd=3, lty=3) # the confidence intervals
+```
+
+## SEASONAL ACTIVITY
+
+Split data between Spring (Feb - May; reprod and pup/kit birth), Summer (May-Sep; kit and pup rearing), and Fall-Winter (Oct-Jan; it and pup dispersal, cold season etc)
+```{r}
+
+bob_coy_Spring <- bob_coy |>
+  filter(Month %in% c(2:5))  
+str(bob_coy_Spring)
+
+# count number of bobcat and coyote detections
+bob_coy_Spring %>%
+  group_by(Species) %>%
+  summarize(count = n())
+
+bob_coy_Summer <- bob_coy |>
+  filter(Month %in% c(6:9))  
+str(bob_coy_Summer)
+
+# count number of bobcat and  coyote detections
+bob_coy_Summer %>%
+  group_by(Species) %>%
+  summarize(count = n())
+
+
+bob_coy_FallWinter <- bob_coy |>
+  filter(Month %in% c(1,10:12))
+str(bob_coy_FallWinter)
+
+# count number of bobcat and  coyote detections
+bob_coy_FallWinter %>%
+  group_by(Species) %>%
+  summarize(count = n())
+
+```
+
+Bobcat and Coyote seasonal
+```{r}
+bobcat_Spring <- bob_coy_Spring[bob_coy_Spring$Species == "Bobcat",]$radtime
+bobcat_Summer <- bob_coy_Summer[bob_coy_Summer$Species == "Bobcat",]$radtime
+bobcat_FallWinter <- bob_coy_FallWinter[bob_coy_FallWinter$Species == "Bobcat",]$radtime
+
+coyote_Spring <- bob_coy_Spring[bob_coy_Spring$Species == "Coyote",]$radtime
+coyote_Summer <- bob_coy_Summer[bob_coy_Summer$Species == "Coyote",]$radtime
+coyote_FallWinter <- bob_coy_FallWinter[bob_coy_FallWinter$Species == "Coyote",]$radtime
+```
+
+Bobcat seasonal activity
+```{r}
+densityPlot(bobcat_Spring, rug = TRUE)
+```
+```{r}
+densityPlot(bobcat_Summer, rug = TRUE)
+```
+```{r}
+densityPlot(bobcat_FallWinter, rug = TRUE)
+```
+
+Coyote seasonal activity
+```{r}
+densityPlot(coyote_Spring, rug = TRUE)
+```
+```{r}
+densityPlot(coyote_Summer, rug = TRUE)
+```
+```{r}
+densityPlot(coyote_FallWinter, rug = TRUE)
+```
+
+Bobcat and coyote seasonal overlap
+
+```{r}
+overlapPlot(bobcat_Spring, coyote_Spring, main="Spring")
+legend('top', c("Bobcat", "Coyote"), lty=c(1,2), col=c(1, "blue3"), bty='n',cex = 1)
+```
+Estimate overlap coefficient
+```{r}
+bob_coy_est_Spring <- overlapEst(bobcat_Spring, coyote_Spring, type = ("Dhat4"))
+print(bob_coy_est_Spring)
+
+watson.wheeler.test(list(bobcat_Spring, coyote_Spring))
+```
+
+```{r}
+overlapPlot(bobcat_Summer, coyote_Summer, main="Summer")
+legend('top', c("Bobcat", "Coyote"), lty=c(1,2), col=c(1,"blue3"), bty='n',cex = 1)
+#mtext(expression(paste(Delta[1] == 0.74, "*", ", ", Delta[4] == 0.73, "*")), side = 3, line = 0.5, cex = 0.8, adj = 0.5)
+```
+Estimate overlap coefficient
+```{r}
+bob_coy_est_Summer <- overlapEst(bobcat_Summer, coyote_Summer, type = ("Dhat1"))
+print(bob_coy_est_Summer)
+
+watson.wheeler.test(list(bobcat_Summer, coyote_Summer))
+```
+
+```{r}
+overlapPlot(bobcat_FallWinter, coyote_FallWinter, main="Fall/Winter")
+legend('top', c("Bobcat", "Coyote"), lty=c(1,2), col=c(1,"blue3"), bty='n',cex = 1)
+#mtext(expression(paste(Delta[1] == 0.86, ", ", Delta[4] == 0.86)), side = 3, line = 0.5, cex = 0.8, adj = 0.5)
+```
+Estimate overlap coefficient
+```{r}
+bob_coy_est_FallWinter <- overlapEst(bobcat_FallWinter, coyote_FallWinter, type = ("Dhat1"))
+print(bob_coy_est_FallWinter)
+
+watson.wheeler.test(list(bobcat_FallWinter, coyote_FallWinter))
+```
+
+## Let's investigate overlap by region (AEP vs ZAL vs VIN)
+
+AEP LANDS
+```{r}
+bob_coy1 <- bob_coy %>%
+    filter(str_detect(Station, "AEP"))
+
+str(bob_coy1)
+
+# count number of bobcat and coyote detections
+bob_coy1 %>%
+  group_by(Species) %>%
+  summarize(count = n())
+
+# count number of bobcat and coyote detections by camera
+bob_coy1_Station <- bob_coy1 %>%
+  group_by(Station, Species) %>%
+  summarize(count = n()) |>
+  rename("Detections" = "count") |>
+  as.data.frame() 
+
+ggplot(data = bob_coy1_Station, aes(x = reorder(Station, Detections), y = Detections, fill = Species)) +
+  geom_bar(stat = "identity", position = position_dodge(), alpha = 0.75)  +
+  geom_text(aes(label = Detections), fontface = "bold", vjust = -0.5,  # Move labels above bars
+            position = position_dodge(.9), size = 4) +
+  labs(x = "\n Station", y = "Camera Events \n", title = "\n AEP ReCreation Lands \n") +
+  scale_fill_manual(values = c("Bobcat" = "black", "Coyote" = "grey")) +  # Adjust colors
+  ylim(0, 16) +  # Set the y-axis limit from 0 to 16
+  theme(plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(face="bold", size = 12),
+        axis.title.y = element_text(face="bold", size = 12),
+        legend.title = element_text(face="bold", size = 10)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+Overlap graph
+```{r}
+bobcat1 <- bob_coy1[bob_coy1$Species == "Bobcat",]$radtime
+coyote1 <- bob_coy1[bob_coy1$Species == "Coyote",]$radtime
+
+overlapPlot(bobcat1, coyote1, main="AEP ReCreation Lands")
+legend('top', c("Bobcat", "Coyote"), lty=c(1,2), col=c(1,"blue3"), bty='n',cex = 1)
+#mtext(expression(paste(Delta[4] == 0.82, "*")), side = 3, line = 0.5, cex = 0.8, adj = 0.5)
+```
+
+Estimate overlap coefficient AEP Lands
+```{r}
+bob_coy_est1 <- overlapEst(bobcat1, coyote1, type = ("Dhat4"))
+print(bob_coy_est1)
+
+watson.wheeler.test(list(bobcat1, coyote1))
+```
+
+ZALESKI STATE FOREST
+```{r}
+bob_coy2 <- bob_coy %>%
+  filter(str_detect(Station, "ZAL"))
+
+str(bob_coy2)
+
+# count number of bobcat and coyote detections
+bob_coy2 %>%
+  group_by(Species) %>%
+  summarize(count = n())
+
+
+# count number of bobcat and coyote detections by camera
+bob_coy2_Station <- bob_coy2 %>%
+  group_by(Station, Species) %>%
+  summarize(count = n()) |>
+  rename("Detections" = "count") |>
+  as.data.frame() 
+
+# let's check out number of detections of bobcats and coyotes by camera to evaluate potential spatial avoidance 
+ggplot(data = bob_coy2_Station, aes(x = reorder(Station, Detections), y = Detections, fill = Species)) +
+  geom_bar(stat = "identity", position = position_dodge(), alpha = 0.75)  +
+ # ylim(0,30) +
+  geom_text(aes(label = Detections), fontface = "bold", vjust = -0.5,
+             position = position_dodge(.9), size = 4) +
+  labs(x = "\n Station", y = "Camera Events \n", title = "\n Zaleski State Forest \n") +
+   scale_fill_manual(values = c("Bobcat" = "black", "Coyote" = "darkgrey")) +  # Adjust colors
+   ylim(0, 53) + 
+  theme(plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(face="bold", size = 12),
+        axis.title.y = element_text(face="bold", size = 12),
+        legend.title = element_text(face="bold", size = 10)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+Overlap plot
+```{r}
+bobcat2 <- bob_coy2[bob_coy2$Species == "Bobcat",]$radtime
+coyote2 <- bob_coy2[bob_coy2$Species == "Coyote",]$radtime
+
+overlapPlot(bobcat2, coyote2, main="Zaleski State Forest")
+legend('top', c("Bobcat", "Coyote"), lty=c(1,2), col=c(1,"blue3"), bty='n',cex = 1)
+#mtext(expression(paste(Delta[4] == 0.77, "*")), side = 3, line = 0.5, cex = 0.8, adj = 0.5)
+```
+
+Estimate overlap coefficient Zaleski
+```{r}
+bob_coy_est2 <- overlapEst(bobcat2, coyote2, type = ("Dhat4"))
+print(bob_coy_est2)
+
+watson.wheeler.test(list(bobcat2, coyote2))
+```
+
+VINTON-FURNACE FOREST
+```{r}
+bob_coy3 <- bob_coy %>%
+  filter(str_detect(Station, "VIN"))
+
+str(bob_coy3)
+
+# count number of bobcat and coyote detections
+bob_coy3 %>%
+  group_by(Species) %>%
+  summarize(count = n())
+
+# count number of bobcat and coyote detections by camera
+bob_coy3_Station <- bob_coy3 %>%
+  group_by(Station, Species) %>%
+  summarize(count = n()) |>
+  rename("Detections" = "count") |>
+  as.data.frame() 
+
+# let's check out number of detections of bobcats and coyotes by camera to evaluate potential spatial avoidance 
+ggplot(data = bob_coy3_Station, aes(x = reorder(Station, Detections), y = Detections, fill = Species)) +
+  geom_bar(stat = "identity", position = position_dodge(), alpha = 0.75)  +
+ # ylim(0,30) +
+  geom_text(aes(label = Detections), fontface = "bold", vjust = -0.5,
+             position = position_dodge(.9), size = 4) +
+  labs(x = "\n Station", y = "Camera Events \n", title = "\n Vinton-Furnace State Forest \n") +
+  scale_fill_manual(values = c("Bobcat" = "black", "Coyote" = "darkgrey")) +  # Adjust colors
+   ylim(0, 34) + 
+  theme(plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(face="bold", size = 12),
+        axis.title.y = element_text(face="bold", size = 12),
+        legend.title = element_text(face="bold", size = 10)) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+Overlap plot
+```{r}
+bobcat3 <- bob_coy3[bob_coy3$Species == "Bobcat",]$radtime
+coyote3 <- bob_coy3[bob_coy3$Species == "Coyote",]$radtime
+
+overlapPlot(bobcat3, coyote3, main="Vinton-Furnace State Forest")
+legend('top', c("Bobcat", "Coyote"), lty=c(1,2), col=c(1,"blue3"), bty='n',cex = 1)
+#mtext(expression(paste(Delta[1] == 0.88, ", ", Delta[4] == 0.88)), side = 3, line = 0.5, cex = 0.8, adj = 0.5)
+```
+
+Estimate overlap coefficient Vinton
+```{r}
+bob_coy_est3 <- overlapEst(bobcat3, coyote3, type = ("Dhat1"))
+print(bob_coy_est3)
+
+watson.wheeler.test(list(bobcat3, coyote3))
+```
